@@ -43,8 +43,8 @@ android {
 }
 
 dependencies {
-    api project(':BraintreeCore')
-    api project(':Card')
+    compileOnly project(':BraintreeCore')
+    compileOnly project(':Card')
     implementation libs.cardinal
 
     implementation libs.androidx.appcompat
