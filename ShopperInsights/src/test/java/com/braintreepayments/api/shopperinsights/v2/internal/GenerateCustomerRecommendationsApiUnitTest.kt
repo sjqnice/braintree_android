@@ -87,6 +87,7 @@ class GenerateCustomerRecommendationsApiUnitTest {
                             paymentOption
                             recommendedPriority
                         }
+                        expiresAt
                     }
                 }
                 """.trimIndent()
@@ -147,7 +148,8 @@ class GenerateCustomerRecommendationsApiUnitTest {
                                 "paymentOption": "PAYPAL",
                                 "recommendedPriority": 1
                             }
-                        ]
+                        ],
+                        "expiresAt": "2026-08-15T00:00:00Z"
                     }
                 }
             }
@@ -170,11 +172,55 @@ class GenerateCustomerRecommendationsApiUnitTest {
             isInPayPalNetwork = true,
             paymentRecommendations = listOf(
                 PaymentOptions(paymentOption = "PAYPAL", recommendedPriority = 1)
-            )
+            ),
+            expiresAt = "2026-08-15T00:00:00Z"
         )
 
         assert(result is GenerateCustomerRecommendationsResult.Success)
-        assertEquals(expectedResult, (result as GenerateCustomerRecommendationsResult.Success).customerRecommendations)
+        val customerRecommendations = (result as GenerateCustomerRecommendationsResult.Success).customerRecommendations
+        assertEquals(expectedResult, customerRecommendations)
+        assertEquals("2026-08-15T00:00:00Z", customerRecommendations.expiresAt)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `when execute is called and expiresAt is absent, expiresAt is null in the result`() =
+    runTest(testDispatcher) {
+        val sessionId = "test-session-id"
+        val responseBody = """
+            {
+                "data": {
+                    "generateCustomerRecommendations": {
+                        "sessionId": "$sessionId",
+                        "isInPayPalNetwork": true,
+                        "paymentRecommendations": [
+                            {
+                                "paymentOption": "PAYPAL",
+                                "recommendedPriority": 1
+                            }
+                        ]
+                    }
+                }
+            }
+        """.trimIndent()
+
+        val braintreeClient = MockkBraintreeClientBuilder()
+            .sendGraphQLPostSuccessfulResponse(responseBody)
+            .build()
+
+        val generateCustomerRecommendationsApi = GenerateCustomerRecommendationsApi(
+            braintreeClient = braintreeClient,
+            customerSessionRequestBuilder = customerSessionRequestBuilder
+        )
+
+        val result = generateCustomerRecommendationsApi.execute(customerSessionRequest, "test-session-id")
+        advanceUntilIdle()
+
+        assert(result is GenerateCustomerRecommendationsResult.Success)
+        assertEquals(
+            null,
+            (result as GenerateCustomerRecommendationsResult.Success).customerRecommendations.expiresAt
+        )
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -306,6 +352,49 @@ class GenerateCustomerRecommendationsApiUnitTest {
         coVerify {
             braintreeClient.sendGraphQLPOST(withArg { actualRequestBody ->
                 JSONAssert.assertEquals(expectedRequestBody, actualRequestBody, false)
+            })
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `when execute is called with campaigns, GraphQL variables include paypalCampaigns`() =
+    runTest(testDispatcher) {
+        val braintreeClient = mockk<BraintreeClient>(relaxed = true)
+
+        val jsonRequestObjectsWithCampaigns = JsonRequestObjects(
+            customer = JSONObject(),
+            purchaseUnits = null,
+            campaigns = JSONArray().apply {
+                put(JSONObject().put("id", "campaign-1"))
+            }
+        )
+        every {
+            customerSessionRequestBuilder.createRequestObjects(customerSessionRequest)
+        } returns jsonRequestObjectsWithCampaigns
+
+        val expectedCampaigns = JSONArray().apply {
+            put(JSONObject().put("id", "campaign-1"))
+        }
+
+        val generateCustomerRecommendationsApi = GenerateCustomerRecommendationsApi(
+            braintreeClient = braintreeClient,
+            customerSessionRequestBuilder = customerSessionRequestBuilder
+        )
+
+        generateCustomerRecommendationsApi.execute(
+            customerSessionRequest = customerSessionRequest,
+            sessionId = "test-session-id"
+        )
+        advanceUntilIdle()
+
+        coVerify {
+            braintreeClient.sendGraphQLPOST(withArg { actualRequestBody ->
+                val actualCampaigns = actualRequestBody
+                    .getJSONObject("variables")
+                    .getJSONObject("input")
+                    .getJSONArray("paypalCampaigns")
+                JSONAssert.assertEquals(expectedCampaigns, actualCampaigns, true)
             })
         }
     }
